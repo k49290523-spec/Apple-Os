@@ -1,0 +1,371 @@
+name: Build Apple Tv apk
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create project files
+        run: |
+          mkdir -p app/src/main/java/com/example/retrotv app/src/main/res/drawable
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "RetroTV"
+          include(":app")
+          EOF
+          cat > build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g
+          android.useAndroidX=true
+          kotlin.code.style=official
+          EOF
+          cat > app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.example.retrotv"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.example.retrotv"
+                  minSdk = 23
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              buildFeatures { compose = true }
+              composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+
+          dependencies {
+              implementation("androidx.core:core-ktx:1.13.1")
+              implementation("androidx.activity:activity-compose:1.9.0")
+              implementation(platform("androidx.compose:compose-bom:2024.06.00"))
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.foundation:foundation")
+              implementation("androidx.compose.material3:material3")
+          }
+          EOF
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-feature android:name="android.software.leanback" android:required="true" />
+              <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
+              <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+              <!-- Lets the launcher see other installed apps (Android 11+) -->
+              <queries>
+                  <intent>
+                      <action android:name="android.intent.action.MAIN" />
+                      <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+                  </intent>
+                  <intent>
+                      <action android:name="android.intent.action.MAIN" />
+                      <category android:name="android.intent.category.LAUNCHER" />
+                  </intent>
+              </queries>
+
+              <application
+                  android:allowBackup="true"
+                  android:icon="@drawable/ic_launcher"
+                  android:banner="@drawable/ic_launcher"
+                  android:label="Glass TV"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTask">
+
+                      <!-- Shows up in the TV app list so you can open it normally -->
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+                      </intent-filter>
+
+                      <!-- Makes it eligible to be the home screen -->
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.HOME" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+          cat > app/src/main/res/drawable/ic_launcher.xml <<'EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp"
+              android:viewportWidth="108" android:viewportHeight="108">
+              <path android:fillColor="#1B0E3A" android:pathData="M0,0h108v108h-108z"/>
+              <path android:fillColor="#FF4F81" android:pathData="M18,30h72v48h-72z"/>
+              <path android:fillColor="#35E0C9" android:pathData="M26,38h56v32h-56z"/>
+              <path android:fillColor="#FFB23E" android:pathData="M40,82h28v6h-28z"/>
+          </vector>
+          EOF
+          cat > app/src/main/java/com/example/retrotv/MainActivity.kt <<'EOF'
+          package com.example.retrotv
+
+          import android.Manifest
+          import android.annotation.SuppressLint
+          import android.bluetooth.BluetoothManager
+          import android.content.Context
+          import android.content.Intent
+          import android.content.pm.PackageManager
+          import android.os.Build
+          import android.os.Bundle
+          import android.provider.Settings
+          import android.view.InputDevice
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.BackHandler
+          import androidx.activity.compose.rememberLauncherForActivityResult
+          import androidx.activity.compose.setContent
+          import androidx.activity.result.contract.ActivityResultContracts
+          import androidx.compose.animation.core.animateFloatAsState
+          import androidx.compose.foundation.*
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.lazy.LazyRow
+          import androidx.compose.foundation.lazy.itemsIndexed
+          import androidx.compose.foundation.shape.CircleShape
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.material3.Text
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.*
+          import androidx.compose.ui.draw.clip
+          import androidx.compose.ui.draw.drawBehind
+          import androidx.compose.ui.focus.*
+          import androidx.compose.ui.geometry.Offset
+          import androidx.compose.ui.graphics.*
+          import androidx.compose.ui.layout.ContentScale
+          import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.unit.*
+          import androidx.core.graphics.drawable.toBitmap
+          import kotlinx.coroutines.delay
+          import java.text.SimpleDateFormat
+          import java.util.Date
+          import java.util.Locale
+
+          class MainActivity : ComponentActivity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContent { Launcher() }
+              }
+          }
+
+          data class AppItem(val label: String, val pkg: String, val icon: ImageBitmap)
+
+          fun loadApps(ctx: Context): List<AppItem> {
+              val pm = ctx.packageManager
+              fun query(cat: String) = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(cat), 0)
+              return (query(Intent.CATEGORY_LEANBACK_LAUNCHER) + query(Intent.CATEGORY_LAUNCHER))
+                  .distinctBy { it.activityInfo.packageName }
+                  .filter { it.activityInfo.packageName != ctx.packageName }
+                  .map { ri -> AppItem(ri.loadLabel(pm).toString(), ri.activityInfo.packageName, ri.loadIcon(pm).toBitmap().asImageBitmap()) }
+                  .sortedBy { it.label.lowercase() }
+          }
+
+          fun openApp(ctx: Context, pkg: String) {
+              val pm = ctx.packageManager
+              (pm.getLeanbackLaunchIntentForPackage(pkg) ?: pm.getLaunchIntentForPackage(pkg))?.let { ctx.startActivity(it) }
+          }
+
+          fun openSettings(ctx: Context) {
+              runCatching { ctx.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+          }
+
+          fun readRecents(ctx: Context): List<String> =
+              ctx.getSharedPreferences("glass", 0).getString("recent", "")!!.split(",").filter { it.isNotBlank() }
+
+          fun pushRecent(ctx: Context, pkg: String): List<String> {
+              val l = (listOf(pkg) + readRecents(ctx).filter { it != pkg }).take(6)
+              ctx.getSharedPreferences("glass", 0).edit().putString("recent", l.joinToString(",")).apply()
+              return l
+          }
+
+          // Remotes, keyboards and gamepads that are plugged in or connected, plus paired Bluetooth devices.
+          @SuppressLint("MissingPermission")
+          fun loadDevices(ctx: Context, btOk: Boolean): List<Pair<String, String>> {
+              val out = mutableListOf<Pair<String, String>>()
+              val mask = InputDevice.SOURCE_KEYBOARD or InputDevice.SOURCE_GAMEPAD or InputDevice.SOURCE_JOYSTICK or
+                  InputDevice.SOURCE_MOUSE or InputDevice.SOURCE_TOUCHPAD
+              InputDevice.getDeviceIds().mapNotNull { InputDevice.getDevice(it) }
+                  .filter { !it.isVirtual && (it.sources and mask) != 0 }
+                  .forEach { out += it.name to "Connected" }
+              if (btOk) {
+                  try {
+                      ctx.getSystemService(BluetoothManager::class.java)?.adapter?.bondedDevices
+                          ?.forEach { out += (it.name ?: it.address) to "Paired" }
+                  } catch (_: SecurityException) { }
+              }
+              return out.distinctBy { it.first }
+          }
+
+          // Frosted "liquid glass" surface: translucent fill plus a bright rim light.
+          private fun Modifier.glass(shape: Shape, strong: Boolean = false) = this
+              .clip(shape)
+              .background(Brush.verticalGradient(listOf(
+                  Color.White.copy(if (strong) 0.36f else 0.20f), Color.White.copy(if (strong) 0.16f else 0.07f))))
+              .border(1.2.dp, Brush.linearGradient(listOf(
+                  Color.White.copy(0.8f), Color.White.copy(0.06f), Color.White.copy(0.35f))), shape)
+
+          @Composable
+          fun GlassItem(
+              modifier: Modifier, shape: Shape, onFocus: () -> Unit = {}, onClick: () -> Unit,
+              content: @Composable BoxScope.() -> Unit
+          ) {
+              var on by remember { mutableStateOf(false) }
+              val s by animateFloatAsState(if (on) 1.15f else 1f, label = "s")
+              Box(
+                  modifier.graphicsLayer { scaleX = s; scaleY = s }
+                      .glass(shape, on)
+                      .onFocusChanged { on = it.isFocused; if (it.isFocused) onFocus() }
+                      .clickable(onClick = onClick),
+                  contentAlignment = Alignment.Center, content = content
+              )
+          }
+
+          @Composable
+          fun AppIcon(app: AppItem, size: Dp, modifier: Modifier = Modifier, onFocus: () -> Unit = {}, onClick: () -> Unit) {
+              GlassItem(modifier.size(size), RoundedCornerShape(size * 0.26f), onFocus, onClick) {
+                  Image(app.icon, app.label, Modifier.fillMaxSize(0.72f), contentScale = ContentScale.Fit)
+              }
+          }
+
+          @Composable
+          fun Launcher() {
+              val ctx = LocalContext.current
+              val apps = remember { loadApps(ctx) }
+              var recents by remember { mutableStateOf(readRecents(ctx)) }
+              var label by remember { mutableStateOf("") }
+              var panel by remember { mutableStateOf(false) }
+              var now by remember { mutableStateOf(Date()) }
+              var devices by remember { mutableStateOf(listOf<Pair<String, String>>()) }
+              var btOk by remember {
+                  mutableStateOf(Build.VERSION.SDK_INT < 31 ||
+                      ctx.checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED)
+              }
+              val ask = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { btOk = it }
+              val first = remember { FocusRequester() }
+              val white = Color.White
+
+              BackHandler(true) { panel = false }
+              LaunchedEffect(Unit) { while (true) { now = Date(); delay(10_000) } }
+              LaunchedEffect(Unit) { if (!btOk) ask.launch(Manifest.permission.BLUETOOTH_CONNECT) }
+              LaunchedEffect(btOk) { while (true) { devices = loadDevices(ctx, btOk); delay(5_000) } }
+              LaunchedEffect(apps) { delay(200); if (apps.isNotEmpty()) runCatching { first.requestFocus() } }
+
+              val go = { a: AppItem -> openApp(ctx, a.pkg); recents = pushRecent(ctx, a.pkg) }
+              val shown = recents.mapNotNull { p -> apps.find { it.pkg == p } }
+
+              Box(
+                  Modifier.fillMaxSize().background(Color(0xFF0A0F24)).drawBehind {
+                      fun orb(c: Color, fx: Float, fy: Float, r: Float) {
+                          val o = Offset(size.width * fx, size.height * fy)
+                          drawCircle(Brush.radialGradient(listOf(c.copy(0.75f), Color.Transparent), o, r), r, o)
+                      }
+                      val m = size.minDimension
+                      orb(Color(0xFF3B82F6), 0.15f, 0.2f, m * 0.7f)
+                      orb(Color(0xFFE040A0), 0.85f, 0.25f, m * 0.6f)
+                      orb(Color(0xFF7C3AED), 0.35f, 0.85f, m * 0.7f)
+                      orb(Color(0xFF2DD4BF), 0.8f, 0.95f, m * 0.55f)
+                  }
+              ) {
+                  Column(Modifier.fillMaxSize().padding(horizontal = 56.dp, vertical = 32.dp)) {
+                      Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(16.dp, Alignment.End), Alignment.CenterVertically) {
+                          GlassItem(Modifier.height(56.dp), RoundedCornerShape(28.dp), onClick = { panel = !panel }) {
+                              Text("Devices  ${devices.size}", Modifier.padding(horizontal = 24.dp), color = white, fontSize = 20.sp)
+                          }
+                          GlassItem(Modifier.size(56.dp), CircleShape, onClick = { openSettings(ctx) }) {
+                              Text("\u2699\uFE0E", color = white, fontSize = 30.sp)
+                          }
+                      }
+                      Column(Modifier.weight(1f).fillMaxWidth(), Arrangement.Center, Alignment.CenterHorizontally) {
+                          Text(SimpleDateFormat("h:mm", Locale.getDefault()).format(now), color = white,
+                              fontSize = 112.sp, fontWeight = FontWeight.Thin)
+                          Text(SimpleDateFormat("EEEE, d MMMM", Locale.getDefault()).format(now),
+                              color = white.copy(0.8f), fontSize = 24.sp)
+                      }
+                      if (shown.isNotEmpty()) {
+                          Text("Recent", color = white.copy(0.85f), fontSize = 18.sp, modifier = Modifier.padding(bottom = 8.dp))
+                          Row(Modifier.glass(RoundedCornerShape(28.dp)).padding(16.dp), Arrangement.spacedBy(18.dp)) {
+                              shown.forEach { a -> AppIcon(a, 64.dp, onFocus = { label = a.label }) { go(a) } }
+                          }
+                      }
+                      Text(label, color = white, fontSize = 22.sp, modifier = Modifier.align(Alignment.CenterHorizontally)
+                          .padding(vertical = 14.dp).height(30.dp))
+                      LazyRow(
+                          Modifier.fillMaxWidth().glass(RoundedCornerShape(36.dp)),
+                          contentPadding = PaddingValues(20.dp),
+                          horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterHorizontally)
+                      ) {
+                          itemsIndexed(apps) { i, a ->
+                              AppIcon(a, 76.dp, if (i == 0) Modifier.focusRequester(first) else Modifier,
+                                  onFocus = { label = a.label }) { go(a) }
+                          }
+                      }
+                  }
+                  if (panel) {
+                      Column(
+                          Modifier.align(Alignment.TopEnd).padding(top = 104.dp, end = 56.dp).width(380.dp)
+                              .glass(RoundedCornerShape(28.dp), true).padding(24.dp),
+                          verticalArrangement = Arrangement.spacedBy(14.dp)
+                      ) {
+                          Text("Connected devices", color = white, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                          if (devices.isEmpty()) Text("No devices found", color = white.copy(0.7f), fontSize = 18.sp)
+                          devices.forEach { (n, k) ->
+                              Column {
+                                  Text(n, color = white, fontSize = 20.sp)
+                                  Text(k, color = white.copy(0.65f), fontSize = 15.sp)
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+          EOF
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: retro-tv-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Publish download link
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "tv-${{ github.run_number }}" app/build/outputs/apk/debug/app-debug.apk --title "Glass TV build ${{ github.run_number }}" --notes "Debug APK for Android TV"
+
